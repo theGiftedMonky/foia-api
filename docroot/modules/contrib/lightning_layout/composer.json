@@ -1,0 +1,118 @@
+{
+    "name": "drupal/lightning_layout",
+    "type": "drupal-module",
+    "description": "Provides the tools to take control of your layout.",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "cweagans/composer-patches": "^1.6.4",
+        "drupal/core": "^8.7.7",
+        "drupal/ctools": "^3.6",
+        "drupal/entity_block": "^1.0",
+        "drupal/lightning_core": "4.* || 5.*",
+        "drupal/panelizer": "^4.4",
+        "drupal/panels": "^4.6"
+    },
+    "require-dev": {
+        "composer/installers": "^1.9",
+        "drupal/core-composer-scaffold": "^8",
+        "drupal/core-dev": "^8",
+        "drush/drush": ">=9.7"
+    },
+    "config": {
+        "preferred-install": {
+            "drupal/core": "dist"
+        }
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-8.x-1.x": "1.x-dev"
+        },
+        "drupal-scaffold": {
+            "file-mapping": {
+                "[project-root]/.editorconfig": false,
+                "[project-root]/.gitattributes": false,
+                "[web-root]/.csslintrc": false,
+                "[web-root]/INSTALL.txt": false,
+                "[web-root]/example.gitignore": false,
+                "[web-root]/modules/README.txt": false,
+                "[web-root]/profiles/README.txt": false,
+                "[web-root]/robots.txt": false,
+                "[web-root]/sites/README.txt": false,
+                "[web-root]/themes/README.txt": false,
+                "[web-root]/web.config": false
+            },
+            "locations": {
+                "web-root": "docroot/"
+            }
+        },
+        "enable-patching": true,
+        "installer-paths": {
+            "docroot/core": [
+                "type:drupal-core"
+            ],
+            "docroot/libraries/{$name}": [
+                "type:drupal-library",
+                "type:bower-asset",
+                "type:npm-asset"
+            ],
+            "docroot/modules/contrib/{$name}": [
+                "type:drupal-module"
+            ],
+            "docroot/profiles/contrib/{$name}": [
+                "type:drupal-profile"
+            ],
+            "docroot/themes/contrib/{$name}": [
+                "type:drupal-theme"
+            ]
+        },
+        "installer-types": [
+            "bower-asset",
+            "npm-asset"
+        ],
+        "patches": {
+            "drupal/panelizer": {
+                "2778565 - Multilingual support for Panelizer": "https://www.drupal.org/files/issues/2020-03-23/2778565-47.patch"
+            },
+            "drupal/panels": {
+                "2878684 - Use String.match to correlate regions when switching Layouts in Panels IPE": "https://www.drupal.org/files/issues/panels-ipe-2878684-3.patch"
+            }
+        }
+    },
+    "autoload": {
+        "classmap": [
+            "tests/contexts"
+        ]
+    },
+    "repositories": {
+        "drupal": {
+            "type": "composer",
+            "url": "https://packages.drupal.org/8"
+        },
+        "assets": {
+            "type": "composer",
+            "url": "https://asset-packagist.org"
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "scripts": {
+        "post-install-cmd": [
+            "@push",
+            "@drupal-scaffold"
+        ],
+        "post-update-cmd": [
+            "@push",
+            "@drupal-scaffold"
+        ],
+        "drupal-scaffold": "DrupalComposer\\DrupalScaffold\\Plugin::scaffold",
+        "nuke": "rm -r -f docroot vendor",
+        "pull": "cp -R -f ./docroot/modules/contrib/lightning_layout/* .",
+        "push": [
+            "rm -r -f ./docroot/modules/contrib/lightning_layout",
+            "mkdir -p ./docroot/modules/contrib/lightning_layout",
+            "@composer archive --file lightning_layout",
+            "tar -x -f lightning_layout.tar -C ./docroot/modules/contrib/lightning_layout",
+            "rm lightning_layout.tar"
+        ]
+    }
+}

@@ -1,0 +1,311 @@
+<?php
+
+/**
+ * @file
+ * Contains layout functionality for Lightning.
+ */
+
+use Drupal\block_content\BlockContentInterface;
+use Drupal\Core\Entity\Entity\EntityFormDisplay;
+use Drupal\Core\Entity\Entity\EntityViewDisplay;
+use Drupal\Core\Entity\Entity\EntityViewMode;
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Url;
+use Drupal\lightning_core\ConfigHelper as Config;
+use Drupal\lightning_core\Element;
+use Drupal\lightning_core\OverrideHelper as Override;
+use Drupal\lightning_layout\Plugin\Field\FieldWidget\PanelizerWidget;
+use Drupal\node\Entity\NodeType;
+use Drupal\node\NodeTypeInterface;
+use Drupal\user\Entity\Role;
+use Drupal\user\RoleInterface;
+
+/**
+ * Implements hook_modules_installed().
+ */
+function lightning_layout_modules_installed(array $modules) {
+  // Don't do anything during config sync.
+  if (\Drupal::isConfigSyncing()) {
+    return;
+  }
+
+  if (in_array('lightning_roles', $modules, TRUE)) {
+    \Drupal::service('lightning.content_roles')
+      ->grantPermissions('creator', [
+        'access panels in-place editing',
+        'change layouts in place editing',
+        'administer panelizer node ? content',
+        'administer panelizer node ? layout',
+      ]);
+  }
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_insert().
+ */
+function lightning_layout_user_role_insert(RoleInterface $role) {
+  // Don't do anything during config sync.
+  if (\Drupal::isConfigSyncing()) {
+    return;
+  }
+  elseif ($role->id() == 'layout_manager' && Config::isBundled($role)) {
+    $node_types = NodeType::loadMultiple();
+    array_walk($node_types, 'lightning_layout_node_type_insert');
+  }
+}
+
+/**
+ * Implements hook_block_content_delete().
+ */
+function lightning_layout_block_content_delete(BlockContentInterface $block_content) {
+  \Drupal::service('block_content.uuid_lookup')->delete($block_content->uuid());
+}
+
+/**
+ * Implements hook_block_alter().
+ */
+function lightning_layout_block_alter(array &$blocks) {
+  $allow = \Drupal::config('lightning_layout.settings')->get('entity_blocks');
+
+  // Suppress all entity_block derivatives for non-whitelisted entity types.
+  $plugins = preg_grep('/^entity_block:/', array_keys($blocks));
+  foreach ($plugins as $plugin_id) {
+    if (!in_array(substr($plugin_id, 13), $allow)) {
+      unset($blocks[$plugin_id]);
+    }
+  }
+}
+
+/**
+ * Implements hook_field_widget_info_alter().
+ */
+function lightning_layout_field_widget_info_alter(array &$info) {
+  Override::pluginClass($info['panelizer'], PanelizerWidget::class);
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function lightning_layout_form_entity_view_display_edit_form_alter(array &$form, FormStateInterface $form_state) {
+  $form['#process'][] = 'lightning_layout_tweak_panelizer_ui';
+}
+
+/**
+ * Tweaks the Panelizer stuff on an entity view display form.
+ *
+ * @param array $element
+ *   The form element containing Panelizer's entity view display options.
+ * @param \Drupal\Core\Form\FormStateInterface $form_state
+ *   The current form state.
+ *
+ * @return array
+ *   The processed element.
+ */
+function lightning_layout_tweak_panelizer_ui(array $element, FormStateInterface $form_state) {
+  /** @var \Drupal\Core\Entity\Display\EntityViewDisplayInterface $display */
+  $display = $form_state->getFormObject()->getEntity();
+
+  $panelizer_enabled = $display->getThirdPartySetting('panelizer', 'enable', FALSE);
+
+  // Check if this display is for an internal view mode.
+  $view_mode = EntityViewMode::load($display->getTargetEntityTypeId() . '.' . $display->getMode());
+  if ($view_mode) {
+    $internal = $view_mode->getThirdPartySetting('lightning_core', 'internal');
+    if ($internal) {
+      // If it's not already applied, don't allow Panelizer.
+      $element['panelizer']['#access'] = $panelizer_enabled;
+
+      // Inform the user what's up.
+      \Drupal::messenger()->addWarning(t('This display is internal and will not be seen by normal users.'));
+    }
+  }
+
+  // If Panelizer isn't enabled, there's nothing else to do.
+  if (empty($panelizer_enabled)) {
+    return $element;
+  }
+
+  // Don't show the table caption.
+  // TODO: Is there an accessible way to hide this?
+  unset($element['panelizer']['displays']['#caption']);
+
+  $route_parameters = \Drupal::routeMatch()->getParameters()->all();
+  $route_parameters = array_filter($route_parameters, 'is_scalar');
+
+  // We got rid of the local action for this, so jury-rig a new local action
+  // that we can mix in with the rest of the UI elements.
+  // See lightning_layout_menu_local_actions_alter().
+  $element['panelizer']['add_link'] = [
+    '#theme' => 'menu_local_action',
+    '#link' => [
+      'title' => t('Create a layout'),
+      'url' => Url::fromRoute('panelizer.wizard.add', $route_parameters),
+    ],
+    // @TODO: Use a theme wrapper if possible.
+    '#prefix' => '<ul class="action-links">',
+    '#suffix' => '</ul>',
+  ];
+  Element::order($element['panelizer'], [
+    'enable',
+    'options',
+    'add_link',
+    'displays',
+  ]);
+
+  return $element;
+}
+
+/**
+ * Implements hook_menu_local_actions_alter().
+ */
+function lightning_layout_menu_local_actions_alter(array &$local_actions) {
+  foreach ($local_actions as $id => $action) {
+    if ($action['id'] == 'panelizer.default.add') {
+      unset($local_actions[$id]);
+    }
+  }
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_insert().
+ */
+function lightning_layout_node_type_insert(NodeTypeInterface $node_type) {
+  // Don't do anything during config sync.
+  if (\Drupal::isConfigSyncing()) {
+    return;
+  }
+
+  user_role_grant_permissions('layout_manager', [
+    'administer panelizer node ' . $node_type->id() . ' defaults',
+  ]);
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_presave().
+ */
+function lightning_layout_user_role_presave(RoleInterface $role) {
+  if ($role->isNew() && $role->id() === 'layout_manager') {
+    $node_types = NodeType::loadMultiple();
+    array_walk($node_types, 'lightning_layout_node_type_insert');
+  }
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_delete().
+ */
+function lightning_layout_node_type_delete(NodeTypeInterface $node_type) {
+  // Don't do anything during config sync.
+  if (\Drupal::isConfigSyncing()) {
+    return;
+  }
+
+  /** @var \Drupal\user\RoleInterface $role */
+  $role = Role::load('layout_manager');
+  if ($role) {
+    user_role_revoke_permissions($role->id(), [
+      'administer panelizer node ' . $node_type->id() . ' defaults',
+    ]);
+  }
+}
+
+/**
+ * Implements hook_panels_ipe_blocks_alter().
+ */
+function lightning_layout_panels_ipe_blocks_alter(array &$blocks = []) {
+  // Lightning includes the Entity Block module, which renders CTools'
+  // entity_view block unnecessary. So don't show it in Panels IPE.
+  foreach ($blocks as $i => $block) {
+    if ($block['provider'] == 'ctools' && strpos($block['plugin_id'], 'entity_view:') === 0) {
+      unset($blocks[$i]);
+    }
+  }
+}
+
+/**
+ * Returns the entity view display associated with a bundle and view mode.
+ *
+ * This is an exact copy of the deprecated entity_get_display() from Core 8.6.x
+ *  except for one change: the default value of the $view_mode parameter.
+ *
+ * @todo Eliminate this in favor of
+ *   \Drupal::service('entity_display.repository')->getViewDisplay() in Core
+ *   8.8.x once that is the lowest supported version.
+ *
+ * @param string $entity_type
+ *   The entity type.
+ * @param string $bundle
+ *   The bundle.
+ * @param string $view_mode
+ *   The view mode, or 'default' to retrieve the 'default' display object for
+ *   this bundle.
+ *
+ * @return \Drupal\Core\Entity\Display\EntityViewDisplayInterface
+ *   The entity view display associated with the view mode.
+ *
+ * @see \Drupal\Core\Entity\EntityStorageInterface::create()
+ * @see \Drupal\Core\Entity\EntityStorageInterface::load()
+ */
+function lightning_layout_entity_get_display($entity_type, $bundle, $view_mode = 'default') {
+  // Try loading the display from configuration.
+  $display = EntityViewDisplay::load($entity_type . '.' . $bundle . '.' . $view_mode);
+
+  // If not found, create a fresh display object. We do not preemptively create
+  // new entity_view_display configuration entries for each existing entity type
+  // and bundle whenever a new view mode becomes available. Instead,
+  // configuration entries are only created when a display object is explicitly
+  // configured and saved.
+  if (!$display) {
+    $display = EntityViewDisplay::create([
+      'targetEntityType' => $entity_type,
+      'bundle' => $bundle,
+      'mode' => $view_mode,
+      'status' => TRUE,
+    ]);
+  }
+
+  return $display;
+}
+
+/**
+ * Returns the entity form display associated with a bundle and form mode.
+ *
+ * This is an exact copy of the deprecated entity_get_form_display() from Core
+ * 8.6.x except for one change: the default value of the $form_mode parameter.
+ *
+ * @todo Eliminate this in favor of
+ *   \Drupal::service('entity_display.repository')->getFormDisplay() in Core
+ *   8.8.x once that is the lowest supported version.
+ *
+ * @param string $entity_type
+ *   The entity type.
+ * @param string $bundle
+ *   The bundle.
+ * @param string $form_mode
+ *   The form mode.
+ *
+ * @return \Drupal\Core\Entity\Display\EntityFormDisplayInterface
+ *   The entity form display associated with the given form mode.
+ *
+ * @see \Drupal\Core\Entity\EntityStorageInterface::create()
+ * @see \Drupal\Core\Entity\EntityStorageInterface::load()
+ */
+function lightning_layout_entity_get_form_display($entity_type, $bundle, $form_mode = 'default') {
+  // Try loading the entity from configuration.
+  $entity_form_display = EntityFormDisplay::load($entity_type . '.' . $bundle . '.' . $form_mode);
+
+  // If not found, create a fresh entity object. We do not preemptively create
+  // new entity form display configuration entries for each existing entity type
+  // and bundle whenever a new form mode becomes available. Instead,
+  // configuration entries are only created when an entity form display is
+  // explicitly configured and saved.
+  if (!$entity_form_display) {
+    $entity_form_display = EntityFormDisplay::create([
+      'targetEntityType' => $entity_type,
+      'bundle' => $bundle,
+      'mode' => $form_mode,
+      'status' => TRUE,
+    ]);
+  }
+
+  return $entity_form_display;
+}
